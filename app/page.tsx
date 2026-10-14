@@ -6,6 +6,7 @@ import {
   botUsers,
   orders,
   deposits,
+  qrisMutations,
 } from "@/lib/db/schema"
 import { ensureSeeded } from "@/lib/db/seed"
 import { desc } from "drizzle-orm"
@@ -37,6 +38,11 @@ export default async function HomePage() {
     .select()
     .from(deposits)
     .orderBy(desc(deposits.createdAt))
+  const allMutations = await db
+    .select()
+    .from(qrisMutations)
+    .orderBy(desc(qrisMutations.createdAt))
+    .limit(30)
 
   const enrichedProducts = allProducts.map((p) => {
     const pStocks = allStocks.filter((s) => s.productId === p.id)
@@ -66,6 +72,7 @@ export default async function HomePage() {
       users: allUsers,
       orders: allOrders,
       deposits: allDeposits,
+      mutations: allMutations,
       stats: {
         totalRevenue,
         paidOrdersCount: paidOrders.length,

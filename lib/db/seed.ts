@@ -1,4 +1,4 @@
-import { db } from "./index"
+import { db, pool } from "./index"
 import {
   botSettings,
   products,
@@ -6,6 +6,7 @@ import {
   botUsers,
   orders,
   deposits,
+  qrisMutations,
 } from "./schema"
 import { count } from "drizzle-orm"
 
@@ -15,6 +16,41 @@ export async function ensureSeeded() {
   if (isSeeded) return
 
   try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS qris_mutations (
+        id SERIAL PRIMARY KEY,
+        source_app TEXT NOT NULL DEFAULT 'GoPay Merchant',
+        raw_notification TEXT NOT NULL,
+        amount INTEGER NOT NULL,
+        matched_reference TEXT,
+        status TEXT NOT NULL DEFAULT 'matched',
+        created_at TIMESTAMP DEFAULT NOW()
+      );
+    `)
+
+    const [{ value: mutationCount }] = await db
+      .select({ value: count() })
+      .from(qrisMutations)
+
+    if (mutationCount === 0) {
+      await db.insert(qrisMutations).values([
+        {
+          sourceApp: "GoPay Merchant (Notif Forwarder)",
+          rawNotification:
+            "Pembayaran QRIS Rp 35.142 berhasil diterima di GARUDA DIGITAL STORE",
+          amount: 35142,
+          matchedReference: "INV-20261014-8821",
+          status: "matched",
+        },
+        {
+          sourceApp: "OrderKuota / OkeConnect",
+          rawNotification: "Mutasi QRIS Masuk sebesar Rp 150.218 berhasil",
+          amount: 150218,
+          matchedReference: "INV-20261014-8829",
+          status: "matched",
+        },
+      ])
+    }
     const [{ value: settingsCount }] = await db
       .select({ value: count() })
       .from(botSettings)

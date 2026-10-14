@@ -21,7 +21,7 @@ export const botSettings = pgTable("bot_settings", {
   qrisString: text("qris_string")
     .notNull()
     .default(
-      "00020101021126610014COM.GO-JEK.WWW01189360091431988421020215ID10243198842100303UMI51440014ID.CO.QRIS.WWW0215ID10243198842100303UMI5204581553033605802ID5920TELESTORE DIGITAL ID6007JAKARTA6105121906304A1B2"
+      "00020101021126610014COM.GO-JEK.WWW01189360091431988421020215ID10243198842100303UMI51440014ID.CO.QRIS.WWW0215ID10243198842100303UMI5204581553033605802ID5920GARUDA DIGITAL STORE6007JAKARTA61051219063042C94"
     ),
   welcomeMessage: text("welcome_message")
     .notNull()
@@ -108,4 +108,14 @@ export const deposits = pgTable("deposits", {
   status: text("status").notNull().default("pending"), // pending | approved | rejected
   createdAt: timestamp("created_at").defaultNow(),
   approvedAt: timestamp("approved_at"),
+})
+
+export const qrisMutations = pgTable("qris_mutations", {
+  id: serial("id").primaryKey(),
+  sourceApp: text("source_app").notNull().default("GoPay Merchant"),
+  rawNotification: text("raw_notification").notNull(),
+  amount: integer("amount").notNull(),
+  matchedReference: text("matched_reference"),
+  status: text("status").notNull().default("matched"), // matched | unmatched
+  createdAt: timestamp("created_at").defaultNow(),
 })

@@ -9,7 +9,10 @@ import {
   orders,
   deposits,
 } from "@/lib/db/schema"
-import { processBotInteraction } from "@/lib/bot-engine"
+import {
+  processBotInteraction,
+  processIncomingQrisMutation,
+} from "@/lib/bot-engine"
 import { and, eq } from "drizzle-orm"
 import { revalidatePath } from "next/cache"
 
@@ -286,3 +289,37 @@ export async function connectTelegramWebhookAction(
     return { ok: false, message: `Error koneksi ke api.telegram.org: ${msg}` }
   }
 }
+
+export async function simulateQrisMutationWebhookAction(input: {
+  rawNotification: string
+  sourceApp: string
+  amountOverride?: number
+}) {
+  const res = await processIncomingQrisMutation(input)
+  revalidatePath("/")
+  return res
+}
+
+export async function saveStaticQrisConfigAction(input: {
+  qrisString: string
+  qrisMerchantName: string
+  qrisNmid: string
+  qrisUniqueCodeEnabled: boolean
+}) {
+  const [existing] = await db.select().from(botSettings).limit(1)
+  if (existing) {
+    await db
+      .update(botSettings)
+      .set({
+        qrisString: input.qrisString.trim(),
+        qrisMerchantName: input.qrisMerchantName.trim(),
+        qrisNmid: input.qrisNmid.trim(),
+        qrisUniqueCodeEnabled: input.qrisUniqueCodeEnabled,
+        updatedAt: new Date(),
+      })
+      .where(eq(botSettings.id, existing.id))
+  }
+  revalidatePath("/")
+  return { ok: true }
+}
+

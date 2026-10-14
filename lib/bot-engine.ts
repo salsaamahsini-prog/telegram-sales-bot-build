@@ -6,9 +6,14 @@ import {
   botUsers,
   orders,
   deposits,
+  qrisMutations,
 } from "@/lib/db/schema"
 import { ensureSeeded } from "@/lib/db/seed"
-import { and, desc, eq, sql } from "drizzle-orm"
+import {
+  convertStaticToDynamicQris,
+  extractAmountFromNotificationText,
+} from "@/lib/qris-utils"
+import { and, desc, eq } from "drizzle-orm"
 
 export interface InlineButton {
   text: string
@@ -569,6 +574,9 @@ export async function processBotInteraction(params: {
       `Setelah membayar, klik tombol *Cek Status / Simulasi Bayar Lunas* di bawah ini:`,
     ].join("\n")
 
+    const staticQris = settings?.qrisString || ""
+    const dynamicQris = convertStaticToDynamicQris(staticQris, totalAmount)
+
     return {
       text,
       qrisCard: {
@@ -576,7 +584,7 @@ export async function processBotInteraction(params: {
         referenceId: invoiceId,
         merchantName: settings?.qrisMerchantName || "GARUDA DIGITAL STORE",
         nmid: settings?.qrisNmid || "ID1024319884210",
-        qrisString: settings?.qrisString || "",
+        qrisString: dynamicQris,
         baseAmount: prod.price,
         uniqueCode,
         totalAmount,
@@ -825,6 +833,9 @@ export async function processBotInteraction(params: {
       status: "pending",
     })
 
+    const staticQris = settings?.qrisString || ""
+    const dynamicQris = convertStaticToDynamicQris(staticQris, totalTransfer)
+
     return {
       text: [
         `*INVOICE TOP-UP SALDO DEPOSIT QRIS*`,
@@ -841,7 +852,7 @@ export async function processBotInteraction(params: {
         referenceId: depositId,
         merchantName: settings?.qrisMerchantName || "GARUDA DIGITAL STORE",
         nmid: settings?.qrisNmid || "ID1024319884210",
-        qrisString: settings?.qrisString || "",
+        qrisString: dynamicQris,
         baseAmount: amount,
         uniqueCode,
         totalAmount: totalTransfer,
@@ -1017,3 +1028,267 @@ export async function processBotInteraction(params: {
     ],
   }
 }
+
+export async function processIncomingQrisMutation(params: {
+  rawNotification: string
+  sourceApp?: string
+  amountOverride?: number
+}) {
+  await ensureSeeded()
+  const sourceApp = params.sourceApp || "GoPay Merchant (Notif Forwarder)"
+  const parsedAmount =
+    params.amountOverride && params.amountOverride > 0
+      ? params.amountOverride
+      : extractAmountFromNotificationText(params.rawNotification)
+
+  if (!parsedAmount || parsedAmount <= 0) {
+    return {
+      ok: false,
+      matched: false,
+      amount: 0,
+      message:
+        "Tidak ditemukan angka nominal Rupiah yang valid dari teks notifikasi.",
+    }
+  }
+
+  const [settings] = await db.select().from(botSettings).limit(1)
+
+  // 1. Check Pending QRIS Orders matching exact totalAmount (Price + 3-digit Unique Code)
+  const [matchingOrder] = await db
+    .select()
+    .from(orders)
+    .where(
+      and(
+        eq(orders.status, "pending"),
+        eq(orders.paymentMethod, "QRIS"),
+        eq(orders.totalAmount, parsedAmount)
+      )
+    )
+    .orderBy(desc(orders.createdAt))
+    .limit(1)
+
+  if (matchingOrder) {
+    const [availableStock] = await db
+      .select()
+      .from(productStocks)
+      .where(
+        and(
+          eq(productStocks.productId, matchingOrder.productId),
+          eq(productStocks.status, "available")
+        )
+      )
+      .orderBy(productStocks.id)
+      .limit(1)
+
+    const [prod] = await db
+      .select()
+      .from(products)
+      .where(eq(products.id, matchingOrder.productId))
+      .limit(1)
+
+    const deliveredCreds =
+      availableStock?.credentials ||
+      "STOK-HABIS-HUBUNGI-ADMIN-UNTUK-PENGIRIMAN-MANUAL"
+
+    if (availableStock) {
+      await db
+        .update(productStocks)
+        .set({
+          status: "sold",
+          orderInvoice: matchingOrder.invoiceId,
+          buyerTelegramId: matchingOrder.telegramId,
+          soldAt: new Date(),
+        })
+        .where(eq(productStocks.id, availableStock.id))
+    }
+
+    await db
+      .update(orders)
+      .set({
+        status: "paid",
+        deliveredContent: deliveredCreds,
+        paidAt: new Date(),
+      })
+      .where(eq(orders.id, matchingOrder.id))
+
+    const [buyer] = await db
+      .select()
+      .from(botUsers)
+      .where(eq(botUsers.telegramId, matchingOrder.telegramId))
+      .limit(1)
+
+    if (buyer) {
+      await db
+        .update(botUsers)
+        .set({
+          totalSpent: buyer.totalSpent + matchingOrder.totalAmount,
+          totalOrders: buyer.totalOrders + 1,
+        })
+        .where(eq(botUsers.id, buyer.id))
+    }
+
+    if (prod) {
+      await db
+        .update(products)
+        .set({ soldCount: prod.soldCount + 1 })
+        .where(eq(products.id, prod.id))
+    }
+
+    await db.insert(qrisMutations).values({
+      sourceApp,
+      rawNotification: params.rawNotification,
+      amount: parsedAmount,
+      matchedReference: matchingOrder.invoiceId,
+      status: "matched",
+    })
+
+    // If Telegram Bot Token is configured, push auto-delivery message directly to buyer's Telegram!
+    if (settings?.botToken) {
+      const telegramMsg = [
+        `*PEMBAYARAN QRIS TERDETEKSI OTOMATIS!*`,
+        `━━━━━━━━━━━━━━━━━━━━━━`,
+        `• No. Invoice : \`${matchingOrder.invoiceId}\``,
+        `• Produk : *${matchingOrder.productName}*`,
+        `• Nominal Masuk : *${formatRupiah(matchingOrder.totalAmount)}*`,
+        `• Status : *LUNAS & AUTO-DELIVERY SUKSES*`,
+        `━━━━━━━━━━━━━━━━━━━━━━`,
+        `*DATA AKUN / VOUCHER / AKSES KAMU:*`,
+        `\`${deliveredCreds}\``,
+        `━━━━━━━━━━━━━━━━━━━━━━`,
+        `*Panduan Penggunaan:*`,
+        `${prod?.termsInstructions || "Gunakan sesuai ketentuan toko."}`,
+      ].join("\n")
+
+      try {
+        await fetch(
+          `https://api.telegram.org/bot${settings.botToken}/sendMessage`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              chat_id: matchingOrder.telegramId,
+              text: telegramMsg,
+              parse_mode: "Markdown",
+            }),
+          }
+        )
+      } catch (e) {
+        console.error("[v0] Failed pushing Telegram auto-delivery message:", e)
+      }
+    }
+
+    return {
+      ok: true,
+      matched: true,
+      type: "ORDER" as const,
+      referenceId: matchingOrder.invoiceId,
+      amount: parsedAmount,
+      buyerName: matchingOrder.buyerName,
+      productName: matchingOrder.productName,
+      deliveredCredentials: deliveredCreds,
+      message: `Cocok dengan Order ${matchingOrder.invoiceId} (${matchingOrder.productName})! Status diubah jadi LUNAS & produk otomatis dikirim ke pembeli.`,
+    }
+  }
+
+  // 2. Check Pending QRIS Deposits matching exact totalTransfer (Amount + 3-digit Unique Code)
+  const [matchingDeposit] = await db
+    .select()
+    .from(deposits)
+    .where(
+      and(
+        eq(deposits.status, "pending"),
+        eq(deposits.totalTransfer, parsedAmount)
+      )
+    )
+    .orderBy(desc(deposits.createdAt))
+    .limit(1)
+
+  if (matchingDeposit) {
+    await db
+      .update(deposits)
+      .set({
+        status: "approved",
+        approvedAt: new Date(),
+      })
+      .where(eq(deposits.id, matchingDeposit.id))
+
+    const [user] = await db
+      .select()
+      .from(botUsers)
+      .where(eq(botUsers.telegramId, matchingDeposit.telegramId))
+      .limit(1)
+
+    const nextBalance = (user?.balance || 0) + matchingDeposit.amount
+    if (user) {
+      await db
+        .update(botUsers)
+        .set({ balance: nextBalance })
+        .where(eq(botUsers.id, user.id))
+    }
+
+    await db.insert(qrisMutations).values({
+      sourceApp,
+      rawNotification: params.rawNotification,
+      amount: parsedAmount,
+      matchedReference: matchingDeposit.depositId,
+      status: "matched",
+    })
+
+    if (settings?.botToken) {
+      const telegramMsg = [
+        `*DEPOSIT SALDO QRIS DITERIMA OTOMATIS!*`,
+        `━━━━━━━━━━━━━━━━━━━━━━`,
+        `• ID Deposit : \`${matchingDeposit.depositId}\``,
+        `• Nominal Masuk : *${formatRupiah(matchingDeposit.totalTransfer)}*`,
+        `• Saldo Ditambahkan : *+${formatRupiah(matchingDeposit.amount)}*`,
+        `• Total Saldo Sekarang : *${formatRupiah(nextBalance)}*`,
+      ].join("\n")
+
+      try {
+        await fetch(
+          `https://api.telegram.org/bot${settings.botToken}/sendMessage`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              chat_id: matchingDeposit.telegramId,
+              text: telegramMsg,
+              parse_mode: "Markdown",
+            }),
+          }
+        )
+      } catch (e) {
+        console.error("[v0] Failed pushing Telegram deposit message:", e)
+      }
+    }
+
+    return {
+      ok: true,
+      matched: true,
+      type: "DEPOSIT" as const,
+      referenceId: matchingDeposit.depositId,
+      amount: parsedAmount,
+      buyerName: matchingDeposit.fullName,
+      productName: `Deposit Saldo ${formatRupiah(matchingDeposit.amount)}`,
+      deliveredCredentials: `Saldo +${formatRupiah(matchingDeposit.amount)}`,
+      message: `Cocok dengan Deposit ${matchingDeposit.depositId}! Saldo +${formatRupiah(matchingDeposit.amount)} otomatis masuk ke akun @${matchingDeposit.username}.`,
+    }
+  }
+
+  // 3. No matching pending order or deposit found — record as unmatched mutation
+  await db.insert(qrisMutations).values({
+    sourceApp,
+    rawNotification: params.rawNotification,
+    amount: parsedAmount,
+    matchedReference: null,
+    status: "unmatched",
+  })
+
+  return {
+    ok: true,
+    matched: false,
+    amount: parsedAmount,
+    message: `Mutasi sebesar ${formatRupiah(parsedAmount)} tercatat, tetapi belum ada tagihan Order/Deposit PENDING dengan nominal + kode unik tepat ${formatRupiah(parsedAmount)}.`,
+  }
+}
+

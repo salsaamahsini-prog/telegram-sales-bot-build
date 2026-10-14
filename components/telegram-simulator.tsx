@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import QRCode from "qrcode"
 import { sendSimulatorCommandAction } from "@/app/actions/store-actions"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -76,6 +77,50 @@ function renderFormattedText(raw: string) {
       </React.Fragment>
     )
   })
+}
+
+function DynamicQrisImage({
+  payload,
+  nmid,
+}: {
+  payload: string
+  nmid: string
+}) {
+  const [url, setUrl] = React.useState<string>("")
+  React.useEffect(() => {
+    let mounted = true
+    QRCode.toDataURL(payload || "QRIS", {
+      width: 140,
+      margin: 1,
+      color: { dark: "#111827", light: "#FFFFFF" },
+    })
+      .then((res) => {
+        if (mounted) setUrl(res)
+      })
+      .catch(() => {})
+    return () => {
+      mounted = false
+    }
+  }, [payload])
+
+  return (
+    <div className="flex flex-col items-center justify-center rounded-lg border-2 border-foreground/15 bg-white p-2 shrink-0">
+      {url ? (
+        <img
+          src={url}
+          alt="QRIS Dinamis"
+          className="size-28 rounded-xs bg-white"
+        />
+      ) : (
+        <div className="size-28 bg-neutral-100 flex items-center justify-center text-[10px] text-neutral-500">
+          QRIS...
+        </div>
+      )}
+      <span className="mt-1 font-mono text-[9px] font-bold text-neutral-700">
+        NMID: {nmid.slice(0, 14)}
+      </span>
+    </div>
+  )
 }
 
 export function TelegramSimulator({
@@ -314,32 +359,10 @@ export function TelegramSimulator({
                         </div>
 
                         <div className="flex flex-col sm:flex-row items-center gap-3">
-                          {/* Simulated Crisp QRIS Code Box */}
-                          <div className="flex flex-col items-center justify-center rounded-lg border-2 border-foreground/15 bg-white p-2.5 shrink-0">
-                            <div className="grid grid-cols-7 gap-0.5 size-24 p-1 bg-white">
-                              {Array.from({ length: 49 }).map((_, idx) => {
-                                const isCorner =
-                                  idx < 3 ||
-                                  (idx >= 4 && idx < 7) ||
-                                  idx % 7 === 0 ||
-                                  idx > 41
-                                const isFilled =
-                                  isCorner ||
-                                  (idx * 17 + m.qrisCard!.uniqueCode) % 3 === 0
-                                return (
-                                  <div
-                                    key={idx}
-                                    className={`rounded-[1px] ${
-                                      isFilled ? "bg-neutral-900" : "bg-neutral-100"
-                                    }`}
-                                  />
-                                )
-                              })}
-                            </div>
-                            <span className="mt-1 font-mono text-[9px] font-bold text-neutral-700">
-                              NMID: {m.qrisCard.nmid.slice(0, 12)}
-                            </span>
-                          </div>
+                          <DynamicQrisImage
+                            payload={m.qrisCard.qrisString}
+                            nmid={m.qrisCard.nmid}
+                          />
 
                           <div className="flex-1 flex flex-col gap-1 text-xs w-full">
                             <div className="font-semibold text-foreground">

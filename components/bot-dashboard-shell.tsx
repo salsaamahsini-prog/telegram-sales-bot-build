@@ -19,6 +19,10 @@ import {
   type BotSettingsData,
 } from "@/components/source-code-generator"
 import {
+  QrisAutoMutasiStudio,
+  type QrisMutationRow,
+} from "@/components/qris-auto-mutasi-studio"
+import {
   Card,
   CardHeader,
   CardTitle,
@@ -49,6 +53,7 @@ interface DashboardPayload {
   users: BotUserRow[]
   orders: OrderRow[]
   deposits: DepositRow[]
+  mutations?: QrisMutationRow[]
   stats: {
     totalRevenue: number
     paidOrdersCount: number
@@ -210,22 +215,37 @@ export function BotDashboardShell({
             <TabsList className="w-full sm:w-auto overflow-x-auto justify-start">
               <TabsTrigger value="simulator">
                 <SparklesIcon className="mr-1.5 size-3.5" />
-                Live Simulator & Overview
+                Live Simulator &amp; Overview
+              </TabsTrigger>
+              <TabsTrigger value="qris-mutasi">
+                <QrCodeIcon className="mr-1.5 size-3.5" />
+                QRIS Statis &amp; Auto-Mutasi
               </TabsTrigger>
               <TabsTrigger value="products">
                 <PackageCheckIcon className="mr-1.5 size-3.5" />
-                Produk & Gudang Stok ({payload.stats.availableStocksTotal})
+                Produk &amp; Gudang Stok ({payload.stats.availableStocksTotal})
               </TabsTrigger>
               <TabsTrigger value="transactions">
-                <QrCodeIcon className="mr-1.5 size-3.5" />
-                Transaksi QRIS & Saldo ({payload.orders.length})
+                <TrendingUpIcon className="mr-1.5 size-3.5" />
+                Transaksi &amp; Saldo ({payload.orders.length})
               </TabsTrigger>
               <TabsTrigger value="sourcecode">
                 <Code2Icon className="mr-1.5 size-3.5" />
-                Ambil SC Bot & Webhook
+                Ambil SC Bot &amp; Webhook
               </TabsTrigger>
             </TabsList>
           </div>
+
+          {/* TAB QRIS STATIS & AUTO-MUTASI */}
+          <TabsContent value="qris-mutasi" className="mt-0">
+            <QrisAutoMutasiStudio
+              settings={payload.settings}
+              orders={payload.orders}
+              deposits={payload.deposits}
+              mutations={payload.mutations || []}
+              onMutate={() => mutate()}
+            />
+          </TabsContent>
 
           {/* TAB 1: Live Bot Simulator + Real-Time Activity */}
           <TabsContent value="simulator" className="mt-0">
