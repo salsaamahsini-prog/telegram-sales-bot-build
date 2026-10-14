@@ -280,7 +280,60 @@ bot.action(/^BUY_BAL:(.+)$/, async (ctx) => {
   ].join('\\n'));
 });
 
-bot.launch().then(() => console.log('Bot Auto-Order Telegram berhasil berjalan!'));
+// Konversi QRIS Statis ke QRIS Dinamis (EMVCo Tag 54 + CRC16-CCITT)
+function calculateCRC16(str) {
+  let crc = 0xFFFF;
+  for (let i = 0; i < str.length; i++) {
+    crc ^= str.charCodeAt(i) << 8;
+    for (let j = 0; j < 8; j++) {
+      crc = (crc & 0x8000) ? ((crc << 1) ^ 0x1021) & 0xFFFF : (crc << 1) & 0xFFFF;
+    }
+  }
+  return crc.toString(16).toUpperCase().padStart(4, '0');
+}
+
+function makeDynamicQris(staticQris, nominal) {
+  const clean = staticQris.trim().slice(0, -4).replace('010211', '010212');
+  const amtStr = String(Math.round(nominal));
+  const tag54 = '54' + amtStr.length.toString().padStart(2, '0') + amtStr;
+  const injected = clean.replace('5802ID', tag54 + '5802ID');
+  return injected + calculateCRC16(injected);
+}
+
+// Beli Pakai QRIS Statis -> Dinamis + Kode Unik 3 Digit
+bot.action(/^BUY_QRIS:(.+)$/, async (ctx) => {
+  await ctx.answerCbQuery();
+  const code = ctx.match[1];
+  const user = await getOrCreateUser(ctx);
+  const { rows } = await pool.query('SELECT * FROM products WHERE code = $1 LIMIT 1', [code]);
+  if (!rows.length) return ctx.reply('Produk tidak ditemukan.');
+  const prod = rows[0];
+
+  const uniqueCode = Math.floor(101 + Math.random() * 399);
+  const totalAmount = prod.price + uniqueCode;
+  const invoiceId = 'INV-' + Date.now();
+  const dynamicQris = makeDynamicQris('${form.qrisString}', totalAmount);
+
+  await pool.query(
+    "INSERT INTO orders (invoice_id, telegram_id, buyer_username, buyer_name, product_id, product_code, product_name, quantity, unit_price, unique_code, total_amount, payment_method, status) VALUES ($1,$2,$3,$4,$5,$6,$7,1,$8,$9,$10,'QRIS','pending')",
+    [invoiceId, user.telegram_id, user.username, user.full_name, prod.id, prod.code, prod.name, prod.price, uniqueCode, totalAmount]
+  );
+
+  return ctx.replyWithMarkdown([
+    '*TAGIHAN QRIS DINAMIS OTOMATIS*',
+    '• Invoice : \`' + invoiceId + '\`',
+    '• Produk : *' + prod.name + '*',
+    '• Kode Unik : *+' + uniqueCode + '*',
+    '• *TOTAL TRANSFER : ' + formatRp(totalAmount) + '*',
+    '',
+    'Payload QRIS Dinamis (Otomatis Terisi Nominal):',
+    '\`' + dynamicQris + '\`',
+    '',
+    'Begitu kamu transfer tepat *' + formatRp(totalAmount) + '*, sistem Auto-Mutasi akan langsung mengirimkan akun ke chat ini detik itu juga!'
+  ].join('\\n'));
+});
+
+bot.launch().then(() => console.log('Bot Auto-Order Telegram + Auto-Mutasi QRIS berjalan!'));
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
 `

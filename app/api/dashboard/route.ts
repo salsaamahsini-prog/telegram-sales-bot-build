@@ -7,6 +7,7 @@ import {
   botUsers,
   orders,
   deposits,
+  qrisMutations,
 } from "@/lib/db/schema"
 import { ensureSeeded } from "@/lib/db/seed"
 import { desc } from "drizzle-orm"
@@ -36,6 +37,11 @@ export async function GET() {
       .select()
       .from(deposits)
       .orderBy(desc(deposits.createdAt))
+    const allMutations = await db
+      .select()
+      .from(qrisMutations)
+      .orderBy(desc(qrisMutations.createdAt))
+      .limit(30)
 
     // Enrich products with available & sold stock counts
     const enrichedProducts = allProducts.map((p) => {
@@ -65,6 +71,7 @@ export async function GET() {
       users: allUsers,
       orders: allOrders,
       deposits: allDeposits,
+      mutations: allMutations,
       stats: {
         totalRevenue,
         paidOrdersCount: paidOrders.length,
