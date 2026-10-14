@@ -1,47 +1,82 @@
-export default function Page() {
-  return (
-    <main
-      style={{
-        colorScheme: 'light dark',
-        position: 'relative',
-        display: 'flex',
-        minHeight: '100vh',
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: 'light-dark(#fff, #000)',
-        color: 'light-dark(#000, #fff)',
-      }}
-    >
-      <svg
-        aria-hidden="true"
-        style={{ width: 80, height: 80 }}
-        width={80}
-        height={80}
-        fill="none"
-        viewBox="0 0 20 20"
-        xmlns="http://www.w3.org/2000/svg"
-        stroke="currentColor"
-        strokeWidth="0.5"
-      >
-        <path
-          d="M14.2 14.2H17V6.9375C17 4.76288 15.2371 3 13.0625 3H5.8V5.8M14.2 14.2V7.79063L7.79062 14.2H14.2ZM14.2 14.2V17H6.9375C4.76288 17 3 15.2371 3 13.0625V5.8H5.8M5.8 5.8V12.2313L12.2313 5.8H5.8Z"
-          strokeLinejoin="round"
-        />
-      </svg>
-      <p
-        style={{
-          position: 'absolute',
-          left: '50%',
-          top: 'calc(50% + 56px)',
-          transform: 'translateX(-50%)',
-          whiteSpace: 'nowrap',
-          fontSize: '14px',
-          fontWeight: 500,
-          color: 'light-dark(#71717a, #a1a1aa)',
-        }}
-      >
-        Your v0 generation will show here.
-      </p>
-    </main>
+import { db } from "@/lib/db"
+import {
+  botSettings,
+  products,
+  productStocks,
+  botUsers,
+  orders,
+  deposits,
+} from "@/lib/db/schema"
+import { ensureSeeded } from "@/lib/db/seed"
+import { desc } from "drizzle-orm"
+import { BotDashboardShell } from "@/components/bot-dashboard-shell"
+
+export const dynamic = "force-dynamic"
+
+export default async function HomePage() {
+  await ensureSeeded()
+
+  const [settings] = await db.select().from(botSettings).limit(1)
+  const allProducts = await db
+    .select()
+    .from(products)
+    .orderBy(desc(products.id))
+  const allStocks = await db
+    .select()
+    .from(productStocks)
+    .orderBy(desc(productStocks.id))
+  const allUsers = await db
+    .select()
+    .from(botUsers)
+    .orderBy(desc(botUsers.joinedAt))
+  const allOrders = await db
+    .select()
+    .from(orders)
+    .orderBy(desc(orders.createdAt))
+  const allDeposits = await db
+    .select()
+    .from(deposits)
+    .orderBy(desc(deposits.createdAt))
+
+  const enrichedProducts = allProducts.map((p) => {
+    const pStocks = allStocks.filter((s) => s.productId === p.id)
+    const availableCount = pStocks.filter(
+      (s) => s.status === "available"
+    ).length
+    const soldStockCount = pStocks.filter((s) => s.status === "sold").length
+    return {
+      ...p,
+      availableStock: availableCount,
+      soldStockCount,
+    }
+  })
+
+  const paidOrders = allOrders.filter((o) => o.status === "paid")
+  const pendingOrders = allOrders.filter((o) => o.status === "pending")
+  const totalRevenue = paidOrders.reduce((acc, o) => acc + o.totalAmount, 0)
+  const availableStocksTotal = allStocks.filter(
+    (s) => s.status === "available"
+  ).length
+
+  const serializedInitialData = JSON.parse(
+    JSON.stringify({
+      settings,
+      products: enrichedProducts,
+      stocks: allStocks,
+      users: allUsers,
+      orders: allOrders,
+      deposits: allDeposits,
+      stats: {
+        totalRevenue,
+        paidOrdersCount: paidOrders.length,
+        pendingOrdersCount: pendingOrders.length,
+        availableStocksTotal,
+        totalUsers: allUsers.length,
+        pendingDepositsCount: allDeposits.filter((d) => d.status === "pending")
+          .length,
+      },
+    })
   )
+
+  return <BotDashboardShell initialData={serializedInitialData} />
 }
